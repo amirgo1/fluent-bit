@@ -239,10 +239,36 @@ static inline int try_to_write(char *buf, int *off, size_t left,
     return FLB_TRUE;
 }
 
+/*
+ * Writes ,"<key>":"<value>" into the payload. Entity values come straight
+ * from the record, so they are JSON escaped on the way out, the same way
+ * escape_stream_names() handles the group and stream names.
+ */
+static int entity_write_field(struct cw_flush *buf, int *offset,
+                              const char *key, const char *value)
+{
+    if (!try_to_write(buf->out_buf, offset, buf->out_buf_size, ",\"", 2)) {
+        return -1;
+    }
+    if (!try_to_write(buf->out_buf, offset, buf->out_buf_size, key, 0)) {
+        return -1;
+    }
+    if (!try_to_write(buf->out_buf, offset, buf->out_buf_size, "\":\"", 3)) {
+        return -1;
+    }
+    if (!flb_utils_write_str(buf->out_buf, offset, buf->out_buf_size,
+                             value, strlen(value), FLB_FALSE)) {
+        return -1;
+    }
+    if (!try_to_write(buf->out_buf, offset, buf->out_buf_size, "\"", 1)) {
+        return -1;
+    }
+    return 0;
+}
+
 static int entity_add_key_attributes(struct flb_cloudwatch *ctx, struct cw_flush *buf,
                                      struct log_stream *stream, int *offset)
 {
-    char ts[KEY_ATTRIBUTES_MAX_LEN];
     if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,
                       "\"keyAttributes\":{",0)) {
         goto error;
@@ -253,31 +279,22 @@ static int entity_add_key_attributes(struct flb_cloudwatch *ctx, struct cw_flush
     }
     if(stream->entity->key_attributes->name != NULL &&
        strlen(stream->entity->key_attributes->name) != 0) {
-        if (snprintf(ts,KEY_ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"Name\":\"",stream->entity->key_attributes->name,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "Name",
+                               stream->entity->key_attributes->name) < 0) {
             goto error;
         }
     }
     if(stream->entity->key_attributes->environment != NULL &&
        strlen(stream->entity->key_attributes->environment) != 0) {
-        if (snprintf(ts,KEY_ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"Environment\":\"",stream->entity->key_attributes->environment,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "Environment",
+                               stream->entity->key_attributes->environment) < 0) {
             goto error;
         }
     }
     if(stream->entity->key_attributes->account_id != NULL &&
        strlen(stream->entity->key_attributes->account_id) != 0) {
-        if (snprintf(ts,KEY_ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"AwsAccountId\":\"",stream->entity->key_attributes->account_id,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "AwsAccountId",
+                               stream->entity->key_attributes->account_id) < 0) {
             goto error;
         }
     }
@@ -293,7 +310,6 @@ error:
 static int entity_add_attributes(struct flb_cloudwatch *ctx, struct cw_flush *buf,
                                  struct log_stream *stream,int *offset)
 {
-    char ts[ATTRIBUTES_MAX_LEN];
     if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,
                       "\"attributes\":{",
                       0)) {
@@ -302,100 +318,70 @@ static int entity_add_attributes(struct flb_cloudwatch *ctx, struct cw_flush *bu
     if (stream->entity->attributes->platform_type != NULL &&
         strlen(stream->entity->attributes->platform_type) != 0) {
         if (strcmp(stream->entity->attributes->platform_type, "eks") == 0) {
-            if (snprintf(ts,ATTRIBUTES_MAX_LEN, "%s%s%s",
-                "\"PlatformType\":\"","AWS::EKS","\"") < 0) {
-                goto error;
-            }
-            if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+            if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,
+                              "\"PlatformType\":\"AWS::EKS\"", 0)) {
                 goto error;
             }
             if(stream->entity->attributes->cluster_name != NULL &&
                strlen(stream->entity->attributes->cluster_name) != 0) {
-                if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-                    "\"EKS.Cluster\":\"",stream->entity->attributes->cluster_name,"\"") < 0) {
-                    goto error;
-                }
-                if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+                if (entity_write_field(buf, offset, "EKS.Cluster",
+                                       stream->entity->attributes->cluster_name) < 0) {
                     goto error;
                 }
             }
         }
         else if (strcmp(stream->entity->attributes->platform_type, "k8s") == 0) {
-            if (snprintf(ts,ATTRIBUTES_MAX_LEN, "%s%s%s",
-                "\"PlatformType\":\"","K8s","\"") < 0) {
-                goto error;
-            }
-            if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+            if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,
+                              "\"PlatformType\":\"K8s\"", 0)) {
                 goto error;
             }
             if(stream->entity->attributes->cluster_name != NULL &&
                strlen(stream->entity->attributes->cluster_name) != 0) {
-                if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-                    "\"K8s.Cluster\":\"",stream->entity->attributes->cluster_name,"\"") < 0) {
-                    goto error;
-                }
-                if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+                if (entity_write_field(buf, offset, "K8s.Cluster",
+                                       stream->entity->attributes->cluster_name) < 0) {
                     goto error;
                 }
             }
         }
     }
     else {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, "%s%s%s",
-            "\"PlatformType\":\"","Generic","\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,
+                          "\"PlatformType\":\"Generic\"", 0)) {
             goto error;
         }
     }
     if(stream->entity->attributes->namespace != NULL &&
        strlen(stream->entity->attributes->namespace) != 0) {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"K8s.Namespace\":\"",stream->entity->attributes->namespace,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "K8s.Namespace",
+                               stream->entity->attributes->namespace) < 0) {
             goto error;
         }
     }
     if(stream->entity->attributes->node != NULL &&
        strlen(stream->entity->attributes->node) != 0) {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"K8s.Node\":\"",stream->entity->attributes->node,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "K8s.Node",
+                               stream->entity->attributes->node) < 0) {
             goto error;
         }
     }
     if(stream->entity->attributes->workload != NULL &&
        strlen(stream->entity->attributes->workload) != 0) {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"K8s.Workload\":\"",stream->entity->attributes->workload,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "K8s.Workload",
+                               stream->entity->attributes->workload) < 0) {
             goto error;
         }
     }
     if(stream->entity->attributes->instance_id != NULL &&
        strlen(stream->entity->attributes->instance_id) != 0) {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"EC2.InstanceId\":\"",stream->entity->attributes->instance_id,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "EC2.InstanceId",
+                               stream->entity->attributes->instance_id) < 0) {
             goto error;
         }
     }
     if(stream->entity->attributes->name_source != NULL &&
        strlen(stream->entity->attributes->name_source) != 0) {
-        if (snprintf(ts,ATTRIBUTES_MAX_LEN, ",%s%s%s",
-            "\"AWS.ServiceNameSource\":\"",stream->entity->attributes->name_source,"\"") < 0) {
-            goto error;
-        }
-        if (!try_to_write(buf->out_buf, offset, buf->out_buf_size,ts,0)) {
+        if (entity_write_field(buf, offset, "AWS.ServiceNameSource",
+                               stream->entity->attributes->name_source) < 0) {
             goto error;
         }
     }
@@ -1813,18 +1799,31 @@ static int set_log_group_retention(struct flb_cloudwatch *ctx, struct log_stream
     struct flb_aws_client *cw_client;
     flb_sds_t body;
     flb_sds_t tmp;
+    char *group_name = NULL;
+    size_t group_name_size = 0;
+    int ret;
 
     flb_plg_info(ctx->ins, "Setting retention policy on log group %s to %dd", stream->group, ctx->log_retention_days);
 
-    body = flb_sds_create_size(68 + strlen(stream->group));
+    /* the group name may come from a record (log_group_template) */
+    ret = flb_utils_write_str_buf(stream->group, strlen(stream->group),
+                                  &group_name, &group_name_size, FLB_FALSE);
+    if (ret < 0) {
+        return -1;
+    }
+
+    body = flb_sds_create_size(68 + group_name_size);
     if (!body) {
         flb_sds_destroy(body);
+        flb_free(group_name);
         flb_errno();
         return -1;
     }
 
     /* construct CreateLogGroup request body */
-    tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%s\",\"retentionInDays\":%d}", stream->group, ctx->log_retention_days);
+    tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%.*s\",\"retentionInDays\":%d}",
+                         (int) group_name_size, group_name, ctx->log_retention_days);
+    flb_free(group_name);
     if (!tmp) {
         flb_sds_destroy(body);
         flb_errno();
@@ -1877,43 +1876,58 @@ int create_log_group(struct flb_cloudwatch *ctx, struct log_stream *stream)
     flb_sds_t body;
     flb_sds_t tmp;
     flb_sds_t error;
+    char *group_name = NULL;
+    size_t group_name_size = 0;
     int ret;
 
     flb_plg_info(ctx->ins, "Creating log group %s", stream->group);
 
+    /* the group name may come from a record (log_group_template) */
+    ret = flb_utils_write_str_buf(stream->group, strlen(stream->group),
+                                  &group_name, &group_name_size, FLB_FALSE);
+    if (ret < 0) {
+        return -1;
+    }
+
     /* construct CreateLogGroup request body */
     if (ctx->log_group_class_type == LOG_CLASS_DEFAULT_TYPE) {
-        body = flb_sds_create_size(30 + strlen(stream->group));
+        body = flb_sds_create_size(30 + group_name_size);
         if (!body) {
             flb_sds_destroy(body);
+            flb_free(group_name);
             flb_errno();
             return -1;
         }
 
-        tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%s\"}", stream->group);
+        tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%.*s\"}",
+                             (int) group_name_size, group_name);
         if (!tmp) {
             flb_sds_destroy(body);
+            flb_free(group_name);
             flb_errno();
             return -1;
         }
         body = tmp;
     } else {
-        body = flb_sds_create_size(37 + strlen(stream->group) + strlen(ctx->log_group_class));
+        body = flb_sds_create_size(37 + group_name_size + strlen(ctx->log_group_class));
         if (!body) {
             flb_sds_destroy(body);
+            flb_free(group_name);
             flb_errno();
             return -1;
         }
 
-        tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%s\", \"logGroupClass\":\"%s\"}",
-                             stream->group, ctx->log_group_class);
+        tmp = flb_sds_printf(&body, "{\"logGroupName\":\"%.*s\", \"logGroupClass\":\"%s\"}",
+                             (int) group_name_size, group_name, ctx->log_group_class);
         if (!tmp) {
             flb_sds_destroy(body);
+            flb_free(group_name);
             flb_errno();
             return -1;
         }
         body = tmp;
     }
+    flb_free(group_name);
 
     if (plugin_under_test() == FLB_TRUE) {
         c = mock_http_call("TEST_CREATE_LOG_GROUP_ERROR", "CreateLogGroup");
