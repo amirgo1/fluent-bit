@@ -388,7 +388,11 @@ struct flb_oci_logan *flb_oci_logan_conf_create(struct flb_output_instance *ins,
     }
 
     flb_output_net_default(host, default_port, ins);
-    flb_sds_destroy(host);
+
+    /* host only owns memory when it was not taken from the instance */
+    if (host != ins->host.name) {
+        flb_sds_destroy(host);
+    }
 
     if (ctx->proxy) {
         tmp = ctx->proxy;
