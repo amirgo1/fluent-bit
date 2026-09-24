@@ -231,6 +231,17 @@ static int package_content(struct flb_ml_stream *mst,
 
     /* Get stream group */
     stream_group = flb_ml_stream_group_get(mst->parser, mst, val_group);
+    if (!stream_group) {
+        /*
+         * The stream reached FLB_ML_MAX_GROUPS and no group exists for the
+         * given key_group value: fall back to the default group so the
+         * content is still processed instead of being dereferenced as NULL.
+         */
+        stream_group = flb_ml_stream_group_get(mst->parser, mst, NULL);
+        if (!stream_group) {
+            return -1;
+        }
+    }
     if (!mst->last_stream_group) {
         mst->last_stream_group = stream_group;
     }
