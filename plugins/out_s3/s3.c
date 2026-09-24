@@ -4474,11 +4474,9 @@ static flb_sds_t flb_pack_msgpack_extract_log_key(void *out_context, const char 
     int ret;
     int alloc_error = 0;
     struct flb_s3 *ctx = out_context;
-    char *val_buf;
+    char *json_str;
     char *key_str = NULL;
     size_t key_str_size = 0;
-    size_t msgpack_size = bytes + bytes / 4;
-    size_t val_offset = 0;
     flb_sds_t out_buf;
     msgpack_object map;
     msgpack_object key;
@@ -4492,9 +4490,13 @@ static flb_sds_t flb_pack_msgpack_extract_log_key(void *out_context, const char 
         return NULL;
     }
 
-    /* Allocate buffer to store log_key contents */
-    val_buf = flb_calloc(1, msgpack_size);
-    if (val_buf == NULL) {
+    /*
+     * Allocate buffer to store log_key contents. The size is only a hint:
+     * non-string values are JSON encoded and can be larger than their
+     * msgpack representation, so the buffer grows on demand.
+     */
+    out_buf = flb_sds_create_size(bytes + bytes / 4);
+    if (out_buf == NULL) {
         flb_plg_error(ctx->ins, "Could not allocate enough "
                       "memory to read record");
         flb_errno();
@@ -4507,7 +4509,7 @@ static flb_sds_t flb_pack_msgpack_extract_log_key(void *out_context, const char 
         flb_plg_error(ctx->ins,
                       "Log event decoder initialization error : %d", ret);
 
-        flb_free(val_buf);
+        flb_sds_destroy(out_buf);
 
         return NULL;
     }
@@ -4558,27 +4560,28 @@ static flb_sds_t flb_pack_msgpack_extract_log_key(void *out_context, const char 
                      * JSON gracefully and double escapes them.
                      */
                     if (val.type == MSGPACK_OBJECT_BIN) {
-                        memcpy(val_buf + val_offset, val.via.bin.ptr, val.via.bin.size);
-                        val_offset += val.via.bin.size;
-                        val_buf[val_offset] = '\n';
-                        val_offset++;
+                        ret = flb_sds_cat_safe(&out_buf, val.via.bin.ptr,
+                                               val.via.bin.size);
                     }
                     else if (val.type == MSGPACK_OBJECT_STR) {
-                        memcpy(val_buf + val_offset, val.via.str.ptr, val.via.str.size);
-                        val_offset += val.via.str.size;
-                        val_buf[val_offset] = '\n';
-                        val_offset++;
+                        ret = flb_sds_cat_safe(&out_buf, val.via.str.ptr,
+                                               val.via.str.size);
                     }
                     else {
-                        ret = flb_msgpack_to_json(val_buf + val_offset,
-                                                  msgpack_size - val_offset, &val,
-                                                  config->json_escape_unicode);
-                        if (ret < 0) {
+                        json_str = flb_msgpack_to_json_str(128, &val,
+                                                           config->json_escape_unicode);
+                        if (json_str == NULL) {
                             break;
                         }
-                        val_offset += ret;
-                        val_buf[val_offset] = '\n';
-                        val_offset++;
+                        ret = flb_sds_cat_safe(&out_buf, json_str, strlen(json_str));
+                        flb_free(json_str);
+                    }
+                    if (ret == 0) {
+                        ret = flb_sds_cat_safe(&out_buf, "\n", 1);
+                    }
+                    if (ret != 0) {
+                        alloc_error = 1;
+                        break;
                     }
                     /* Exit early once log_key has been found for current record */
                     break;
@@ -4600,20 +4603,18 @@ static flb_sds_t flb_pack_msgpack_extract_log_key(void *out_context, const char 
 
     flb_log_event_decoder_destroy(&log_decoder);
 
-    /* If nothing was read, destroy buffer */
-    if (val_offset == 0) {
-        flb_free(val_buf);
-        return NULL;
-    }
-    val_buf[val_offset] = '\0';
-
-    /* Create output buffer to store contents */
-    out_buf = flb_sds_create(val_buf);
-    if (out_buf == NULL) {
+    if (alloc_error) {
         flb_plg_error(ctx->ins, "Error creating buffer to store log_key contents.");
         flb_errno();
+        flb_sds_destroy(out_buf);
+        return NULL;
     }
-    flb_free(val_buf);
+
+    /* If nothing was read, destroy buffer */
+    if (flb_sds_len(out_buf) == 0) {
+        flb_sds_destroy(out_buf);
+        return NULL;
+    }
 
     return out_buf;
 }
