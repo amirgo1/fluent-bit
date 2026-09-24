@@ -1884,6 +1884,38 @@ int sp_process_data(const char *tag, int tag_len,
     return records;
 }
 
+/*
+ * Clone an array of aggregation values. Entries of type FLB_SP_STRING own
+ * their flb_sds_t, so the clone gets its own copy of every string instead of
+ * sharing the pointer with the source node. Release it with
+ * groupby_nums_destroy().
+ */
+static struct aggregate_num *aggregate_nums_clone(struct aggregate_num *nums,
+                                                  int size)
+{
+    int i;
+    struct aggregate_num *clone;
+
+    clone = flb_calloc(1, sizeof(struct aggregate_num) * size);
+    if (!clone) {
+        return NULL;
+    }
+
+    for (i = 0; i < size; i++) {
+        clone[i] = nums[i];
+        if (nums[i].type == FLB_SP_STRING && nums[i].string) {
+            clone[i].string = flb_sds_create_len(nums[i].string,
+                                                 flb_sds_len(nums[i].string));
+            if (!clone[i].string) {
+                groupby_nums_destroy(clone, i);
+                return NULL;
+            }
+        }
+    }
+
+    return clone;
+}
+
 int sp_process_hopping_slot(const char *tag, int tag_len,
                             struct flb_sp_task *task)
 {
@@ -1929,7 +1961,7 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
             return -1;
         }
 
-        aggr_node_hs->nums = malloc(sizeof(struct aggregate_node) * map_entries);
+        aggr_node_hs->nums = aggregate_nums_clone(aggr_node->nums, map_entries);
         if (!aggr_node_hs->nums) {
             flb_errno();
             flb_free(hs);
@@ -1937,7 +1969,6 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
             return -1;
         }
 
-        memcpy(aggr_node_hs->nums, aggr_node->nums, sizeof(struct aggregate_num) * map_entries);
         aggr_node_hs->records = aggr_node->records;
 
         /* Clone aggregate data */
@@ -1952,7 +1983,7 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
                     if (!aggr_node_hs->aggregate_data) {
                         flb_errno();
                         flb_free(hs);
-                        flb_free(aggr_node_hs->nums);
+                        groupby_nums_destroy(aggr_node_hs->nums, map_entries);
                         flb_free(aggr_node_hs);
                         return -1;
                     }
@@ -1960,7 +1991,7 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
 
                 if (aggregate_func_clone[ckey->aggr_func - 1](aggr_node_hs, aggr_node, ckey, key_id) == -1) {
                     flb_errno();
-                    flb_free(aggr_node_hs->nums);
+                    groupby_nums_destroy(aggr_node_hs->nums, map_entries);
                     flb_free(aggr_node_hs->aggregate_data);
                     flb_free(aggr_node_hs);
                     flb_free(hs);
@@ -1999,19 +2030,14 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
 
         if (aggr_node_hs->records > 0) {
             aggr_node_hs->groupby_nums =
-                flb_calloc(1, sizeof(struct aggregate_node) * gb_entries);
+                aggregate_nums_clone(aggr_node->groupby_nums, gb_entries);
             if (gb_entries > 0 && !aggr_node_hs->groupby_nums) {
                 flb_errno();
                 flb_free(hs);
-                flb_free(aggr_node_hs->nums);
+                groupby_nums_destroy(aggr_node_hs->nums, map_entries);
                 flb_free(aggr_node_hs->aggregate_data);
                 flb_free(aggr_node_hs);
                 return -1;
-            }
-
-            if (aggr_node_hs->groupby_nums != NULL) {
-                memcpy(aggr_node_hs->groupby_nums, aggr_node->groupby_nums,
-                       sizeof(struct aggregate_num) * gb_entries);
             }
 
             aggr_node_hs->nums_size = aggr_node->nums_size;
@@ -2021,7 +2047,7 @@ int sp_process_hopping_slot(const char *tag, int tag_len,
             mk_list_add(&aggr_node_hs->_head, &hs->aggregate_list);
         }
         else {
-            flb_free(aggr_node_hs->nums);
+            groupby_nums_destroy(aggr_node_hs->nums, map_entries);
             flb_free(aggr_node_hs->aggregate_data);
             flb_free(aggr_node_hs);
         }
