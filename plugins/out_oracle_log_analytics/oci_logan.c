@@ -1129,6 +1129,10 @@ static int total_flush(struct flb_event_chunk *event_chunk,
         }
 
         for(i = 0; i < map_size; i++) {
+            /* only string values can be packed as a log record */
+            if (map.via.map.ptr[i].val.type != MSGPACK_OBJECT_STR) {
+                continue;
+            }
             if (check_config_from_record(map.via.map.ptr[i].key,
                                          "message",
                                          7) == FLB_TRUE) {
@@ -1150,6 +1154,13 @@ static int total_flush(struct flb_event_chunk *event_chunk,
             msgpack_pack_str_body(&mp_pck, map.via.map.ptr[msg].val.via.str.ptr,
                                   map.via.map.ptr[msg].val.via.str.size);
         }
+        else {
+            /*
+             * keep the number of packed entries consistent with the
+             * logRecords array size
+             */
+            msgpack_pack_str(&mp_pck, 0);
+        }
         log = -1;
         msg = -1;
     }
@@ -1165,6 +1176,12 @@ static int total_flush(struct flb_event_chunk *event_chunk,
                                           config->json_escape_unicode);
     msgpack_sbuffer_destroy(&mp_sbuf);
     flb_log_event_decoder_destroy(&log_decoder);
+
+    if (out_buf == NULL) {
+        flb_plg_error(ctx->ins, "could not format payload");
+        res = FLB_ERROR;
+        goto clean_up;
+    }
 
     flb_plg_debug(ctx->ins, "payload=%s", out_buf);
     flb_plg_debug(ctx->ins, "lg_id=%s", log_group_id);
